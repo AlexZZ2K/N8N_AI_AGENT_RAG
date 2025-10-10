@@ -6,8 +6,8 @@
 
 An n8n + OpenAI + Supabase RAG Agent for intelligent document Q&A, designed by **Alex Chan (@AlexZZ2K)**.
 
-**Important Notice: Testing and Educational Purposes Only
-This AI chatbot was created as part of an application assignment and is intended for demonstration and testing purposes only. The outputs and responses provided do not represent the views, policies, or official information of Olympia or any other organization. These responses do not constitute verified facts, professional advice, or authoritative information.**
+>**Important Notice: Testing and Educational Purposes Only
+This AI chatbot was created as part of an job application assignment and is intended for demonstration and testing purposes only. The outputs and responses provided do not represent the views, policies, or official information of Olympia or any other organization. These responses do not constitute verified facts, professional advice, or authoritative information.**
 
 ---
 
