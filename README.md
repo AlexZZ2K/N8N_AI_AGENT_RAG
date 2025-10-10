@@ -35,7 +35,7 @@ Built in **n8n**, the pipeline performs end-to-end ingestion, cleaning, chunking
 - Each chunk gets a short contextual summary via LLM
 - Stored as vector embeddings in **Supabase Vector Store**
 - Supports contextual retrieval (Anthropic-style)
-   ![Workflow overview B](ChunkingStrategy.png) 
+   ![Workflow overview B]([ChunkingStrategy.png](https://github.com/AlexZZ2K/N8N_AI_AGENT_RAG/blob/b8bb0b95ccd00a46715dddf9b3a9cc31a50b425c/Chunking_Strategy.png)) 
 
 ### 3️⃣ AI Agent & Logging Phase
 - User submits a query via webhook/form
