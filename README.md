@@ -2,7 +2,7 @@
 
 > **Demo:** [Demo Chatbot](https://preview--alexchanrag-test.lovable.app/)
 
-![Workflow overview C](DemoVid.mp4)
+![mainpage ](mainpage.png)
 
 An n8n + OpenAI + Supabase RAG Agent for intelligent document Q&A, designed by **Alex Chan (@AlexZZ2K)**.
 
