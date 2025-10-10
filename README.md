@@ -1,10 +1,10 @@
 # N8N_AI_AGENT_RAG
 
 > **RAG based AI Agent Demo:** [click here to try it out](https://preview--alexchanrag-test.lovable.app/)
+> An n8n + OpenAI + Supabase RAG Agent for intelligent document Q&A, designed by **Alex Chan (@AlexZZ2K)**.
 
 ![mainpage ](mainpage.png)
 
-An n8n + OpenAI + Supabase RAG Agent for intelligent document Q&A, designed by **Alex Chan (@AlexZZ2K)**.
 
 >**Important Notice: Testing and Educational Purposes Only
 This AI chatbot was created as part of an job application assignment and is intended for demonstration and testing purposes only. The outputs and responses provided do not represent the views, policies, or official information of Olympia or any other organization. These responses do not constitute verified facts, professional advice, or authoritative information.**
