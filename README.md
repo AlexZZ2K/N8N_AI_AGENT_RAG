@@ -28,14 +28,14 @@ Built in **n8n**, the pipeline performs end-to-end ingestion, cleaning, chunking
 - Parsing via **LlamaParser** and Markdown conversion
 - Manual cleanup and post-formatting
 - Output: unified Markdown text for downstream processing
- ![Workflow overview](PreProcessing.png)
+ ![Workflow overview](ChunkingStrategy.png)
 
 ### 2️⃣ Chunking & Embedding Phase
 - Hierarchical chunking based on headings (#, ##, ###)
 - Each chunk gets a short contextual summary via LLM
 - Stored as vector embeddings in **Supabase Vector Store**
 - Supports contextual retrieval (Anthropic-style)
- ![Workflow overview](ChunkingStrategy.png)
+ ![Workflow overview](AIAgent_MetaLogging.png) 
 
 ### 3️⃣ AI Agent & Logging Phase
 - User submits a query via webhook/form
@@ -43,7 +43,7 @@ Built in **n8n**, the pipeline performs end-to-end ingestion, cleaning, chunking
 - RAG Agent retrieves top chunks and forms answer
 - Logs success/fallback data (human help = TRUE/FALSE)
 - After 3 failed replies → escalate to human agent
-  ![Workflow overview](AIAgent_MetaLogging.png)
+  ![Workflow overview](PreProcessing.png)
 
 
 ---
