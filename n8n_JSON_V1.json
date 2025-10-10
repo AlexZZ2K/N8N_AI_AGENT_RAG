@@ -1,0 +1,1837 @@
+{
+  "name": "RAG Alex Chan",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "File",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "your file",
+              "fieldType": "file"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        -1056,
+        160
+      ],
+      "id": "ed14d215-f53c-4feb-a577-fa441f9fe998",
+      "name": "On form submission",
+      "webhookId": "REDACTED"
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "binaryPropertyName": "your_file",
+        "options": {
+          "encoding": "utf8"
+        }
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        -896,
+        160
+      ],
+      "id": "416a9e96-39ec-4de1-bf48-c6d44dd554db",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Here is a list of headers:   {{ $json.headers }}\n----------------------------------------\nFor each header I need you to re-rank it's header level logically (H1-H5). Here is a list you MUST follow.\n1. Based on logic and common practices, find the H1 headers. And make sure they have one #.\n2. Between each H1 Header, use logic to classify the H2. \"Artikel\" and Bijlage (I,II,III,IV,V etc.) Must always be H2.\n3. Very Important: Anything inbetween H2 Headers that are not H1 headers need to be Either H3, H4 or H5. Classify them with logic. \n4. At the end, For each \"Bijlage\" (appendix), re-evaluate if the sub-sections (H2-H5) are ordered correctly in the hierarchy. And consistent. For example, all headers regarding \"voorwaarden\" have to be on the same level.\n5. Do not delete any duplicates.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are a strict structure normalizer for documents. Do not delete any headers. You are only supposed to change the # amount of each header. You should only give  me the output."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        -368,
+        -112
+      ],
+      "id": "7a02c20a-8444-468a-97b1-33c8e4624da1",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -368,
+        80
+      ],
+      "id": "0145c73d-016c-4455-a49f-64f4097c3889",
+      "name": "OpenAI Chat Model",
+      "credentials": {"REDACTED": true}
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combineBySql",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        32,
+        144
+      ],
+      "id": "98213495-f1b7-4b60-8b82-dd516dc15db2",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6398b98a-764a-45ca-8f6c-207a0c9b7448",
+              "name": "correct_headers",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -96,
+        -112
+      ],
+      "id": "0fc3bcad-9c18-401f-b2e8-76f3793d6279",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * Scalable Markdown structural normalizer\n * Input: items[0].json.data  (string Markdown)\n * Output: items[0].json.cleaned (string Markdown)\n */\n\nconst cfg = {\n  // Patterns to remove as pagination/boilerplate artifacts\n  stripLines: [\n    { rx: /^\\s*\\d+\\s*$(?:\\r?\\n)?/gm },        // bare page numbers\n    { rx: /^-{3,}\\s*$(?:\\r?\\n)?/gm },         // horizontal rules as separators\n    { rx: /^Page\\s+\\d+\\s*$(?:\\r?\\n)?/gmi },   // \"Page 12\" (EN)\n    { rx: /^Pagina\\s+\\d+\\s*$(?:\\r?\\n)?/gmi }, // \"Pagina 12\" (NL)\n  ],\n\n  // Normalize headings by keyword -> target level\n  // Add languages/labels as needed; order matters (more specific first)\n  headingMap: [\n    { keyword: /^(Bijlage|Annex|Appendix)\\b/i, level: 2 },   // ## Bijlage\n    { keyword: /^(Hoofdstuk|Chapter)\\b/i, level: 2 },        // ## Hoofdstuk\n    { keyword: /^(Artikel|Article|Clause)\\b/i, level: 3 },   // ### Artikel\n  ],\n\n  // Section heading levels we consider for dedupe windows\n  dedupeHeadingMin: 2, // consider ##, ###, #### sections\n  dedupeHeadingMax: 4,\n\n  // Dedupe fenced blocks (e.g., mermaid, code); keep first\n  dedupeFences: true,\n\n  // Dedupe *identical* sections (same heading+body) \u2014 disable if you expect intentional repeats\n  dedupeSections: true,\n\n  // Keep first non-empty line as H1 title; demote other H1s to H2\n  preserveFirstH1: true,\n\n  // Collapse 3+ blank lines -> 2\n  collapseBlank: true,\n};\n\nconst item = items[0] || { json: {} };\nlet md = (item.json && (item.json.data || item.json.markdown || item.json.text)) || '';\n\nfunction stripArtifacts(s, rules) {\n  for (const r of rules) s = s.replace(r.rx, '');\n  return s;\n}\n\nfunction normalizeHeadings(s, map, preserveFirstH1) {\n  // Apply keyword-based normalization regardless of current level\n  for (const { keyword, level } of map) {\n    // Replace any heading like #### Keyword ... -> ###/## as configured\n    const re = new RegExp(`^(#{1,6})\\\\s+(${keyword.source})(.*)$`, 'gmi');\n    s = s.replace(re, (_, hashes, kw, rest) => `${'#'.repeat(level)} ${kw}${rest}`);\n  }\n\n  // Optionally demote stray H1s after the first non-empty line\n  if (preserveFirstH1) {\n    const lines = s.split(/\\r?\\n/);\n    let seenFirstNonEmpty = false;\n    for (let i = 0; i < lines.length; i++) {\n      const l = lines[i];\n      if (!seenFirstNonEmpty && l.trim() !== '') {\n        seenFirstNonEmpty = true; // keep presumed title as-is\n        continue;\n      }\n      if (/^#\\s+/.test(l)) lines[i] = l.replace(/^#\\s+/, '## ');\n    }\n    s = lines.join('\\n');\n  }\n  return s;\n}\n\nfunction dedupeFencedBlocks(s) {\n  const fence = /```[\\s\\S]*?```/g;\n  const seen = new Set();\n  let out = '';\n  let last = 0;\n  let m;\n  while ((m = fence.exec(s)) !== null) {\n    out += s.slice(last, m.index);\n    const block = m[0];\n    const key = 'FENCE|' + block.trim();\n    if (!seen.has(key)) out += block;\n    seen.add(key);\n    last = m.index + block.length;\n  }\n  out += s.slice(last);\n  return out;\n}\n\nfunction dedupeSectionsByHeading(s, minLevel, maxLevel) {\n  const re = new RegExp(`^(#{${minLevel},${maxLevel}})\\\\s+(.+)\\\\s*$`, 'gm');\n  const indices = [];\n  let m;\n  while ((m = re.exec(s)) !== null) indices.push({ idx: m.index, level: m[1].length, title: m[2].trim() });\n  if (!indices.length) return s;\n\n  const chunks = [];\n  for (let i = 0; i < indices.length; i++) {\n    const start = indices[i].idx;\n    const end = (i + 1 < indices.length) ? indices[i + 1].idx : s.length;\n    chunks.push(s.slice(start, end));\n  }\n\n  const seen = new Set();\n  const kept = [];\n  for (const sec of chunks) {\n    const key = sec.replace(/\\s+/g, ' ').trim(); // whitespace-insensitive\n    if (!seen.has(key)) {\n      seen.add(key);\n      kept.push(sec);\n    }\n  }\n\n  const prologue = s.slice(0, indices[0].idx);\n  return prologue + kept.join('');\n}\n\nfunction collapseBlankLines(s) {\n  return s.replace(/\\n{3,}/g, '\\n\\n');\n}\n\n// Pipeline\nmd = stripArtifacts(md, cfg.stripLines);\nmd = normalizeHeadings(md, cfg.headingMap, cfg.preserveFirstH1);\nif (cfg.dedupeFences) md = dedupeFencedBlocks(md);\nif (cfg.dedupeSections) md = dedupeSectionsByHeading(md, cfg.dedupeHeadingMin, cfg.dedupeHeadingMax);\nif (cfg.collapseBlank) md = collapseBlankLines(md);\n\nreturn [{ json: { cleaned_data: md } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -720,
+        160
+      ],
+      "id": "f7160ff7-2113-431a-8eb8-2b7413b75c64",
+      "name": "Clean - JS"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst headers = items.map((item) => {\n  const matches = item?.json?.cleaned_data.match(/(#+)\\s(.+)/g);\n  return matches ? matches.join(\" \") : \"\";\n});\nreturn { headers: headers.join(\" \") };\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -528,
+        -112
+      ],
+      "id": "eca3fdb4-c1fb-47fa-afd7-8ba5ae036b44",
+      "name": "Extract TOC"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Input: merged item with\n//   - json.cleaned_data  (string: full Markdown)\n//   - json.correct_headers (string: list of headings from AI Agent)\n// Output:\n//   - json.markdown (string: updated Markdown with levels applied)\n\nconst mergeItems = $input.all();\nif (!mergeItems.length) return [];\n\nfunction parseDesired(listStr) {\n  return (listStr || \"\")\n    .split(/\\r?\\n/)\n    .filter(l => /^#{1,6}\\s+/.test(l))\n    .map(l => {\n      const lvl = (l.match(/^#+/) || ['#'])[0].length;\n      const title = l.replace(/^#{1,6}\\s+/, '').replace(/\\s+#+\\s*$/, '').trim();\n      return { level: lvl, title };\n    });\n}\n\nfunction parseOriginalDoc(md) {\n  const lines = md.split(/\\r?\\n/);\n  let inFence = false, fenceToken = null, fenceLen = 0;\n  const orig = [];\n  for (let i = 0; i < lines.length; i++) {\n    const line = lines[i];\n\n    // toggle fences ``` or ~~~\n    const m = line.match(/^(`{3,}|~{3,})([^\\r\\n]*)?$/);\n    if (m) {\n      const token = m[1][0], len = m[1].length;\n      if (!inFence) { inFence = true; fenceToken = token; fenceLen = len; }\n      else if (token === fenceToken && len === fenceLen) { inFence = false; fenceToken = null; fenceLen = 0; }\n    }\n\n    if (!inFence && /^(?:>\\s*){0,3}#{1,6}\\s+/.test(line)) {\n      const lvl = (line.match(/#{1,6}/) || ['#'])[0].length;\n      const title = line\n        .replace(/^(?:>\\s*){0,3}#{1,6}\\s+/, '')\n        .replace(/\\s+#+\\s*$/, '')\n        .trim();\n      orig.push({ index: i, level: lvl, title });\n    }\n  }\n  return { lines, orig };\n}\n\nfunction norm(t) {\n  return (t || \"\")\n    .toLowerCase()\n    .replace(/<[^>]*>/g, \"\")\n    .replace(/[`*_~]/g, \"\")\n    .replace(/\\s+/g, \" \")\n    .replace(/[^\\p{L}\\p{N}\\s-]/gu, \"\")\n    .trim();\n}\n\nfunction buildQueues(desired) {\n  const q = new Map();\n  for (const d of desired) {\n    const k = norm(d.title);\n    if (!q.has(k)) q.set(k, []);\n    q.get(k).push(d.level);\n  }\n  return q;\n}\n\nconst updatedItems = mergeItems.map((item) => {\n  const cleaned = item.json.cleaned_data || item.json.cleaned || item.json.markdown || \"\";\n  const agentOut = item.json.correct_headers || item.json.output || item.json.text || \"\";\n\n  if (typeof cleaned !== \"string\") throw new Error(\"cleaned_data must be a string\");\n  if (typeof agentOut !== \"string\") throw new Error(\"correct_headers must be a string\");\n\n  const desired = parseDesired(agentOut);\n  const { lines, orig } = parseOriginalDoc(cleaned);\n\n  const useSequential = desired.length && desired.length === orig.length;\n  const queues = buildQueues(desired);\n  let seqIdx = 0;\n\n  // apply levels\n  let inFence = false, fenceToken = null, fenceLen = 0;\n  for (let i = 0; i < lines.length; i++) {\n    const line = lines[i];\n\n    const m = line.match(/^(`{3,}|~{3,})([^\\r\\n]*)?$/);\n    if (m) {\n      const token = m[1][0], len = m[1].length;\n      if (!inFence) { inFence = true; fenceToken = token; fenceLen = len; }\n      else if (token === fenceToken && len === fenceLen) { inFence = false; fenceToken = null; fenceLen = 0; }\n    }\n\n    if (!inFence && /^(?:>\\s*){0,3}(#{1,6})\\s+/.test(line)) {\n      const currentTitle = line\n        .replace(/^(?:>\\s*){0,3}#{1,6}\\s+/, '')\n        .replace(/\\s+#+\\s*$/, '')\n        .trim();\n\n      let newLevel = null;\n      if (useSequential) {\n        newLevel = desired[seqIdx] ? desired[seqIdx].level : null;\n        seqIdx++;\n      } else {\n        const key = norm(currentTitle);\n        const q = queues.get(key);\n        if (q && q.length) newLevel = q.shift();\n        else if (desired[seqIdx]) { newLevel = desired[seqIdx].level; seqIdx++; }\n      }\n\n      if (newLevel && newLevel >= 1 && newLevel <= 6) {\n        // preserve any leading blockquote markers\n        const bq = (line.match(/^(?:>\\s*){0,3}/) || [\"\"])[0];\n        lines[i] = bq + \"#\".repeat(newLevel) + \" \" + currentTitle;\n      }\n    }\n  }\n\n  return { json: { ...item.json, markdown: lines.join(\"\\n\") } };\n});\n\nreturn updatedItems;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        192,
+        144
+      ],
+      "id": "a5de3694-4668-4dcd-a738-1dca0ec0a5e9",
+      "name": "Correct the MD hierarchy"
+    },
+    {
+      "parameters": {
+        "content": "# CAO- Large ",
+        "height": 480,
+        "width": 1680,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1104,
+        -144
+      ],
+      "id": "05350e6c-ab0d-4409-8733-3570012de453",
+      "name": "Sticky Note6"
+    },
+    {
+      "parameters": {
+        "content": "# Chunking Strategy\n",
+        "height": 656,
+        "width": 1312,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        656,
+        -144
+      ],
+      "id": "45272e20-c740-4301-8c26-24a89a26f7d9",
+      "name": "Sticky Note7"
+    },
+    {
+      "parameters": {
+        "content": "# Embed & Insert",
+        "height": 656,
+        "width": 912,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1984,
+        -144
+      ],
+      "id": "d0e139c1-7746-4978-a669-2dbc2454af04",
+      "name": "Sticky Note8"
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * n8n Code node \u2014 Markdown chunker (header-aware) \u2014 FIXED\n * - Correctly reads previous chunk's charEnd from chunks[...].json.charEnd\n * - Prevents overlap from starting before current buffer start\n */\n\nconst CONFIG = {\n  targetTokens: 1000,      // ~4k chars\n  hardMaxTokens: 1500,     // split single huge sections by paragraphs\n  overlapTokens: 140,      // ~560 char overlap for continuity\n  startAtLevel: 2,         // split on ## and deeper\n  tokenCharsRatio: 4       // ~4 chars \u2248 1 token\n};\n\nconst item = $input.first();\nconst md = (item?.json?.markdown ?? \"\").toString();\nif (!md) return [];\n\nconst approxTokens = chars => Math.ceil(chars / CONFIG.tokenCharsRatio);\n\n// 1) Find sections by headings\nconst headingRE = new RegExp(`^(#{${CONFIG.startAtLevel},6})\\\\s+(.+?)\\\\s*$`, \"gm\");\nconst sections = [];\nlet m;\nwhile ((m = headingRE.exec(md)) !== null) {\n  sections.push({ level: m[1].length, title: m[2].replace(/\\s+#+\\s*$/, \"\").trim(), start: m.index });\n}\nif (sections.length === 0 || sections[0].start > 0) {\n  sections.unshift({ level: CONFIG.startAtLevel, title: \"(intro)\", start: 0 });\n}\nfor (let i = 0; i < sections.length; i++) {\n  sections[i].end = (i + 1 < sections.length) ? sections[i + 1].start : md.length;\n}\nfunction headerPath(idx) {\n  const here = sections[idx];\n  const path = [here.title];\n  let curLevel = here.level;\n  for (let j = idx - 1; j >= 0; j--) {\n    if (sections[j].level < curLevel) {\n      path.unshift(sections[j].title);\n      curLevel = sections[j].level;\n    }\n  }\n  return path.join(\" > \");\n}\n\nconst chunks = [];\nlet bufStart = sections[0].start;\nlet bufEnd = sections[0].end;\nlet bufIdxStart = 0;\n\nfunction pushChunk(start, end, idxStart) {\n  // === FIX: use .json.charEnd from previous chunk ===\n  let prefixStart = start;\n  if (chunks.length && CONFIG.overlapTokens > 0) {\n    const prevEnd = chunks[chunks.length - 1].json.charEnd; // <-- fixed\n    const wantOverlapChars = CONFIG.overlapTokens * CONFIG.tokenCharsRatio;\n    // don\u2019t overlap earlier than current buffer start\n    prefixStart = Math.max(prevEnd - wantOverlapChars, start);\n    // try to align to previous paragraph break if possible\n    const paraStart = md.lastIndexOf(\"\\n\\n\", start);\n    if (paraStart !== -1 && paraStart >= prefixStart) prefixStart = paraStart + 2;\n  }\n\n  // simple fenced code guard (don\u2019t cut inside ``` blocks)\n  function adjustForFences(s, e) {\n    const fenceRe = /```/g;\n    let open = false, mm;\n    while ((mm = fenceRe.exec(md)) !== null && mm.index < e) open = !open;\n    if (open) {\n      const close = md.indexOf(\"```\", e);\n      e = close !== -1 ? close + 3 : md.length;\n      if (s > e) s = e; // safety\n    }\n    return [s, e];\n  }\n\n  let [s, e] = adjustForFences(prefixStart, end);\n  const text = md.slice(s, e);\n\n  chunks.push({\n    json: {\n      chunk: text,\n      headerPath: headerPath(idxStart),\n      idx: chunks.length,\n      tokens: approxTokens(text.length),\n      charStart: s,\n      charEnd: e,\n      sourceLengthChars: md.length,\n    }\n  });\n}\n\nfor (let i = 1; i < sections.length; i++) {\n  const tentativeEnd = sections[i].end;\n  const text = md.slice(bufStart, tentativeEnd);\n  const tks = approxTokens(text.length);\n\n  if (tks <= CONFIG.targetTokens) {\n    bufEnd = tentativeEnd;\n    continue;\n  }\n\n  // If current buffer only contains a single (large) section, hard-split by paragraphs\n  if (bufEnd === sections[i - 1].end) {\n    const secText = md.slice(bufStart, bufEnd);\n    if (approxTokens(secText.length) > CONFIG.hardMaxTokens) {\n      const paras = secText.split(/\\n{2,}/);\n      let curChars = 0;\n      let partStart = bufStart;\n      for (let p = 0; p < paras.length; p++) {\n        const seg = paras[p] + (p < paras.length - 1 ? \"\\n\\n\" : \"\");\n        curChars += seg.length;\n        if (approxTokens(curChars) >= CONFIG.targetTokens) {\n          const partEnd = partStart + curChars;\n          pushChunk(partStart, partEnd, bufIdxStart);\n          partStart = partEnd;\n          curChars = 0;\n        }\n      }\n      if (curChars > 0) pushChunk(partStart, bufEnd, bufIdxStart);\n    } else {\n      pushChunk(bufStart, bufEnd, bufIdxStart);\n    }\n  } else {\n    // close multi-section buffer before adding next one\n    pushChunk(bufStart, bufEnd, bufIdxStart);\n  }\n\n  // start new buffer\n  bufStart = sections[i].start;\n  bufEnd = sections[i].end;\n  bufIdxStart = i;\n}\n\n// flush tail\npushChunk(bufStart, bufEnd, bufIdxStart);\n\n// return one item per chunk\nreturn chunks;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        784,
+        32
+      ],
+      "id": "37dce457-076c-491e-ba95-6740e1e598bb",
+      "name": "Chunking node"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "68e8970a-c90e-41b0-b216-5444b3abadef",
+              "name": "chunk",
+              "value": "={{ $json.chunk }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        976,
+        32
+      ],
+      "id": "3d6d078d-adcd-471f-a2f3-35221cd383c8",
+      "name": "Edit Fields2"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=<document> \n{{ $('MD cleaned').item.json.markdown }}\n</document> \nHere is the chunk we want to situate within the whole document \n<chunk> \n{{ $json.chunk }}\n</chunk> \nPlease give a short succinct context (of around 450 characters) to situate this chunk within the overall document for the purposes of improving search retrieval of the chunk. begin each chunk with a short sentence of where it is situated (which chapter? And which sub-chapter?) Answer only with the succinct context and nothing else. \n\nVery important: the output must be in dutch",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        1456,
+        96
+      ],
+      "id": "fe5e68a3-f436-4869-9407-49493d4914df",
+      "name": "Basic LLM Chain"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5-nano",
+          "mode": "list",
+          "cachedResultName": "gpt-5-nano"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1408,
+        288
+      ],
+      "id": "9e9d463f-b07c-4907-89b4-932c5b3747f9",
+      "name": "OpenAI Chat Model1",
+      "credentials": {"REDACTED": true}
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 2,
+        "options": {
+          "reset": false
+        }
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1248,
+        -32
+      ],
+      "id": "5e7b96c2-89d5-40df-9a83-e78dc57de6d4",
+      "name": "Loop Over Items",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "69c8ebd1-7116-4565-bbe6-8b2b565c5b2b",
+              "name": "context",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1760,
+        320
+      ],
+      "id": "fbe70f53-f99d-48c6-8f6a-0e5f670721d6",
+      "name": "Edit Fields1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7c1d2cbe-8b15-4310-8d28-c370bc224f31",
+              "name": "chunk",
+              "value": "={{ $('Edit Fields2').item.json.chunk }}",
+              "type": "string"
+            },
+            {
+              "id": "2c5536a9-0365-4ca1-8527-bd0b87ab3129",
+              "name": "context",
+              "value": "={{ $json.context }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1776,
+        -80
+      ],
+      "id": "d26619c4-2c06-4012-a349-abec8bdfb62b",
+      "name": "Enhanced Chunk"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.body.sessionId }}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        32,
+        2016
+      ],
+      "id": "faf7de18-a4c3-4ef1-8d83-5a181530128e",
+      "name": "Postgres Chat Memory",
+      "credentials": {"REDACTED": true}
+      }
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "tableName": {"value": "example_table"}},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "typeVersion": 1.3,
+      "position": [
+        2304,
+        -64
+      ],
+      "id": "0848838f-f99f-4e8f-b56c-a061e126c2d0",
+      "name": "Supabase Vector Store",
+      "credentials": {"REDACTED": true}
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        2288,
+        144
+      ],
+      "id": "005884c7-ca87-46a8-8e3f-2e5234d3170d",
+      "name": "Embeddings OpenAI",
+      "credentials": {"REDACTED": true}
+      }
+    },
+    {
+      "parameters": {
+        "jsonMode": "expressionData",
+        "jsonData": "={{ $json }}",
+        "textSplittingMode": "custom",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
+      "position": [
+        2480,
+        128
+      ],
+      "id": "6a62d299-72bb-4b66-9cbc-d833fcdc819f",
+      "name": "Default Data Loader"
+    },
+    {
+      "parameters": {
+        "chunkSize": 6000,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [
+        2512,
+        304
+      ],
+      "id": "3dfccd87-3167-4ba7-a379-a603cc76b3a9",
+      "name": "Recursive Character Text Splitter"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        272,
+        2048
+      ],
+      "id": "cd069d33-153d-4c69-ac89-8a798fb79ff2",
+      "name": "Embeddings OpenAI1",
+      "credentials": {"REDACTED": true}
+      }
+    },
+    {
+      "parameters": {
+        "content": "# AI Agent\n",
+        "height": 624,
+        "width": 1440,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -880,
+        1552
+      ],
+      "typeVersion": 1,
+      "id": "4a4a2559-3956-4c52-ade1-f187b22f64d4",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst updatedItems = items.map((item) => {\n  const content = `${item.json.context}\\n---\\n${item.json.chunk}`;\n  return { content };\n});\nreturn updatedItems;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2064,
+        -64
+      ],
+      "id": "0650cf87-131e-472a-9075-9f4e2ad0b3ff",
+      "name": "Code"
+    },
+    {
+      "parameters": {
+        "amount": 15
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1776,
+        96
+      ],
+      "id": "9a357041-90a0-46fe-89ed-13a117100c94",
+      "name": "Wait",
+      "webhookId": "REDACTED"
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolDescription": "Use RAG to look information in the database.",
+        "tableName": {"value": "example_table"}},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "typeVersion": 1.3,
+      "position": [
+        272,
+        1872
+      ],
+      "id": "7ea7ac70-409a-4db4-a94f-9e3d81864af5",
+      "name": "Supabase documents DB",
+      "credentials": {"REDACTED": true}
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Methode: Contextual Retrieval\nRAG technique developed by Anthropic (the company behind Claude) that improves information retrieval by including relevant background information and context in each chunk before it is indexed. This results in more nuanced and accurate outputs compared to traditional RAG methods.",
+        "height": 144,
+        "width": 768,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        528
+      ],
+      "id": "1398eadb-f613-4470-80a1-fa0e28cf95ee",
+      "name": "Sticky Note9"
+    },
+    {
+      "parameters": {
+        "content": "## Methode: Hierarchical Chunking\n---\n\nSince our sources mainly consist of text and are already organized with headers (#/##/###/####), we can use this structure as a chunking method. Long sections under a header will be further divided (for example, Article 14 with 17,000 characters).\n\n**Example:**\nChunk 1: Article 1 (\u2248800 tokens, 3,200 characters)\nChunk 2: Is the CLA applicable to your company? (500 tokens, 2,000 characters)\n...\nChunk 5: Article 14 (\u2248800 tokens, 3,200 characters)\nChunk 6: Article 14 (\u2248800 tokens, 3,200 characters)\n...\n\n",
+        "height": 320,
+        "width": 512,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        656,
+        528
+      ],
+      "id": "ed5366f4-a66b-47c3-a7ce-709194695084",
+      "name": "Sticky Note10"
+    },
+    {
+      "parameters": {
+        "content": "## Methode: Standaard Embedding met OpenAI & Supabase\nChunks are converted into numerical representations.\nFaster, more efficient, no need to search through long texts.\n",
+        "height": 144,
+        "width": 912,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1984,
+        528
+      ],
+      "id": "7f66ad20-ed8e-42f3-b656-cc04bfc77db5",
+      "name": "Sticky Note11"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "REDACTED",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -816,
+        1792
+      ],
+      "id": "80af8de1-e265-4060-bec7-d1867a43e24e",
+      "name": "Webhook",
+      "webhookId": "REDACTED"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"response\": $json.output.response, \"status\": $json.output.status } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        400,
+        1680
+      ],
+      "id": "be593b61-dfed-46ed-9885-a7bb53789b53",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -16,
+        1920
+      ],
+      "id": "b5578c90-2874-4fce-84df-7efa39b7b6f3",
+      "name": "OpenAI Chat Model2",
+      "credentials": {"REDACTED": true}
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"response\": \"Your AI assistant's reply message\",\n  \"status\": \"success\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        128,
+        1888
+      ],
+      "id": "b7f9d2ec-d84e-429d-8230-a5a7cee2f9a6",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "content": "# Websites -small\n",
+        "height": 320,
+        "width": 832,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -256,
+        368
+      ],
+      "id": "b8100c66-8061-4a55-a3e4-b422ef898a08",
+      "name": "Sticky Note12"
+    },
+    {
+      "parameters": {
+        "content": "# Meta Data logging - W.I.P",
+        "height": 560,
+        "width": 832,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -272,
+        960
+      ],
+      "typeVersion": 1,
+      "id": "78f62d04-6bac-41e2-915f-1b8dad4383aa",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "schema": {"value": "public"}},
+        "table": {"value": "example_table"}},
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "successful_session": "={{ $json.body.successful_session }}",
+            "session_id": "={{ $json.body.session_id }}"
+          },
+          "matchingColumns": [
+            "session_id"
+          ],
+          "schema": {"value": "public"}},
+            {
+              "id": "session_id",
+              "displayName": "session_id",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "initial_scope",
+              "displayName": "initial_scope",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "human_help",
+              "displayName": "human_help",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "problem_keywords",
+              "displayName": "problem_keywords",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "language",
+              "displayName": "language",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "privacy_consent",
+              "displayName": "privacy_consent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "successful_session",
+              "displayName": "successful_session",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        224,
+        1376
+      ],
+      "id": "0c850f7b-ce62-4ad1-ac13-20a156566322",
+      "name": "Update rows - Success?",
+      "credentials": {"REDACTED": true}
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "schema": {"value": "public"}},
+        "table": {"value": "example_table"}},
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "session_id": "={{ $('Webhook').item.json.body.session_id }}",
+            "human_help": "={{ $('Webhook').item.json.body.human_help }}"
+          },
+          "matchingColumns": [
+            "session_id"
+          ],
+          "schema": {"value": "public"}},
+            {
+              "id": "session_id",
+              "displayName": "session_id",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "initial_scope",
+              "displayName": "initial_scope",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "human_help",
+              "displayName": "human_help",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "problem_keywords",
+              "displayName": "problem_keywords",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "language",
+              "displayName": "language",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "privacy_consent",
+              "displayName": "privacy_consent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "successful_session",
+              "displayName": "successful_session",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        256,
+        1184
+      ],
+      "id": "c644e216-3279-449a-8ed8-9f6fdc92bb11",
+      "name": "Update rows - help from human?",
+      "credentials": {"REDACTED": true}
+      }
+    },
+    {
+      "parameters": {
+        "schema": {"value": "public"}},
+        "table": {"value": "example_table"}},
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "privacy_consent": "={{ $('Switch - Two phase meta-data collection').item.json.body.privacy_consent }}",
+            "session_id": "={{ $('Switch - Two phase meta-data collection').item.json.body.session_id }}",
+            "language": "={{ $('Switch - Two phase meta-data collection').item.json.body.language }}",
+            "initial_scope": "={{ $('Switch - Two phase meta-data collection').item.json.body.initial_scope }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": {"value": "public"}},
+            {
+              "id": "session_id",
+              "displayName": "session_id",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "initial_scope",
+              "displayName": "initial_scope",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "human_help",
+              "displayName": "human_help",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "problem_keywords",
+              "displayName": "problem_keywords",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "language",
+              "displayName": "language",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "privacy_consent",
+              "displayName": "privacy_consent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "successful_session",
+              "displayName": "successful_session",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        256,
+        1008
+      ],
+      "id": "f9af5773-cdd7-43a6-b532-5a4261cdb4f0",
+      "name": "Insert rows in a table",
+      "credentials": {"REDACTED": true}
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT EXISTS (\n    SELECT 1\n    FROM meta_data\n    WHERE session_id = '{{ $json.body.sessionId }}'\n) AS session_exists;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -176,
+        1024
+      ],
+      "id": "6054867e-4e0f-4c5d-b6e4-e1fd68e328c7",
+      "name": "Does session ID exist?",
+      "credentials": {"REDACTED": true}
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b862335a-0495-4de9-ab41-350dbaaf8245",
+              "leftValue": "={{ $json.session_exists }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        16,
+        1024
+      ],
+      "id": "1f363813-542c-476c-82b9-72b70c2b56a3",
+      "name": "If it doesn't exist, add row"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body.meta_data_phase }}",
+                    "rightValue": 1,
+                    "operator": {
+                      "type": "number",
+                      "operation": "equals"
+                    },
+                    "id": "aa16c1ee-f452-4460-9b79-131b0f3a3d71"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "meta_data_phase 1"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "2a2f671a-1163-44ca-8d15-67922702d1f8",
+                    "leftValue": "={{ $json.body.meta_data_phase }}",
+                    "rightValue": 2,
+                    "operator": {
+                      "type": "number",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "meta_data_phase 2"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        -544,
+        1600
+      ],
+      "id": "45c85808-3846-456e-a280-ca6416b6996d",
+      "name": "Switch - Two phase meta-data collection"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1b46e178-7f3b-49f7-b0b8-e5e9716f9c3a",
+              "leftValue": "={{ $json.has_human_help }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        16,
+        1200
+      ],
+      "id": "9d4157b0-69ec-4a40-a149-4238d3580a68",
+      "name": "If it doesn't exist, add row1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "051fe307-2b6d-4dc4-9864-0e6ae8947ae7",
+              "leftValue": "={{ $json.body.successful_session }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -544,
+        1792
+      ],
+      "id": "0f5aabe8-d817-43f3-ba71-a906b5e3d1f3",
+      "name": "Was our question helpful?"
+    },
+    {
+      "parameters": {
+        "formTitle": "File",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "file",
+              "fieldType": "file",
+              "multipleFiles": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        -192,
+        496
+      ],
+      "id": "c145ae5d-e7eb-4942-9746-37044596eb95",
+      "name": "On form submission1",
+      "webhookId": "REDACTED"
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "binaryPropertyName": "file",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        80,
+        496
+      ],
+      "id": "49cadaac-e955-48a4-84e9-c367fcd71d96",
+      "name": "Extract from File1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c4aa40c8-96bc-46f5-846a-b4a384d3a0f0",
+              "name": "markdown",
+              "value": "={{ $json.data }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        336,
+        496
+      ],
+      "id": "59a371c9-fec1-4597-b7c1-a3360886fe93",
+      "name": "Edit Fields3"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8bba9e75-c19a-4311-91ea-57a89a8afea0",
+              "name": "markdown",
+              "value": "={{ $json.markdown }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        320,
+        144
+      ],
+      "id": "47789ec5-417c-4647-8037-d031a2e806ad",
+      "name": "MD"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "305dbe69-fce7-4474-97c0-22d57d5b1caa",
+              "name": "markdown",
+              "value": "={{ $json.markdown }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        464,
+        144
+      ],
+      "id": "7f4bb667-f357-4bad-8ee1-6ae6e3049763",
+      "name": "MD cleaned"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=the message: {{ $json.body.message }}\nthe sessionId: {{ $json.body.sessionId }}\nThe language of the message is: {{ $json.body.language }}. Translate if needed.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are a helpful assistant that searches the Supabase \"documents\" Database to help answer questions. Always add citations at the end.\n\nDo not list Any back-end system information. You are customer facing.\n\nGuardrails:\nDo not answer any questions regarding Chatmemory/ chat history of other sessions. \n\nDo not give personal information such as IP, bank credentials, system credentials of companies or people when asked.\n\n-----------------------------------\n\nTools Available:\n\nSupabase documents DB \u2013 Use this to look up relevant CAO articles, clauses, or definitions. And also info about \"Toelatingsstelsel (Wtta)\", and \"Belangrijkste gevolgen Wet Implementatie EU-richtlijn transparante en voorspelbare arbeidsvoorwaarden\"\n\n1. Always call this tool before answering a user\u2019s question.\n\n2. If no relevant results are found, inform the user politely.\n\n------------------------------------\nInstructions (Rules)\n\n-Use the RAG retrieval tool before answering; never rely solely on memory.\n\n-paraphrase the relevant CAO article when possible, and mention the article number or section.\n\n-If the retrieved results are unclear or conflicting:\n\n-Clarify what is certain,\n\n-Flag what is uncertain,\n\n-Suggest contacting HR or a union representative for confirmation.\n\n-Never provide legal advice\u2014only explain CAO rules and terms.\n\n-Keep answers short, structured, and plain-language friendly.\n\n- Do not suggest doing something like \"do you want me to...write/get/give etc.\". just focus on answering the question.\n\n- keep maximum characters at 1000. Answering the question short and precise is important.\n\n\n\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        -16,
+        1680
+      ],
+      "id": "705d4a77-a4ef-4651-b2cf-2bb9e28f5ce3",
+      "name": "Chat AI",
+      "retryOnFail": true,
+      "waitBetweenTries": 3500
+    },
+    {
+      "parameters": {
+        "content": "## Pre-Processing\nFormatting of the CLA (Collective Labour Agreement) is inconsistent \u2192 make it consistent\n\nWebsites already have mostly neat formatting \u2192 convert to Markdown \u2192 manually remove small details and unnecessary information.",
+        "height": 320,
+        "width": 816,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1104,
+        368
+      ],
+      "id": "ea3d9ae5-f860-495c-94d3-e54971e0bbfc",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT EXISTS (\n    SELECT 1\n    FROM meta_data\n    WHERE session_id = '{{ $json.body.sessionId }}'\n      AND (human_help IS NOT NULL AND human_help <> '')\n) AS has_human_help;\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -176,
+        1200
+      ],
+      "id": "0107cd54-3a1a-4974-8489-8f1a92ab3492",
+      "name": "Is field filled ?",
+      "credentials": {"REDACTED": true}
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "051fe307-2b6d-4dc4-9864-0e6ae8947ae7",
+              "leftValue": "={{ $json.body.user_question_stage }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -544,
+        1984
+      ],
+      "id": "9966485c-a33b-4533-b127-c76eda105697",
+      "name": "question_or_user_input"
+    }
+  ],
+  "pinData": {
+    "AI Agent": [
+      {
+        "json": {
+          "output": "# Hoofdstuk 1 Algemeen\n## Artikel 1 Werkingssfeer\n### Is de cao op uw onderneming van toepassing? (schematische weergave)\n## Artikel 2 Definities\n## Artikel 3 Duur, verlenging en be\u00ebindiging, tussentijdse be\u00ebindiging/wijzigingen\n## Artikel 4 Rechten en plichten bij inschrijving\n### Artikel 5 Verplichtingen van de uitzendonderneming\n### Artikel 6 Verplichtingen van de uitzendkracht\n# Hoofdstuk 2 Rechtspositie en flexibiliteit\n## Artikel 7 Beschikbaarheid en exclusiviteit\n## Artikel 8 Inroosteren\n## Artikel 9 Oproeptermijn en oproepregels\n## Artikel 10 Kwartaal-, jaarurennorm of norm over een andere periode\n## Artikel 11 Tijd-voor-tijd\n## Artikel 12 Tijdverantwoording\n## Artikel 13 Aangaan van de uitzendovereenkomst\n## Artikel 14 Rechtspositie\n### Fase A\n### Fase B\n### Fase C\n## Artikel 14 Rechtspositie\n### Fase A\n### Fase B\n### Fase C\n### Tussenpoos\n### Uitzondering uitzendkracht in beroepsbegeleidende leerweg en minderjarige uitzendkracht\n## Toelichting fasesysteem\n### Fase A\n### Fase B\n### Fase C\n### Uitzonderingen\n## Artikel 15 Opvolgend werkgeverschap\n## Artikel 15 Opvolgend werkgeverschap\n## Artikel 16 Proeftijd\n## Artikel 17 Arbeidsduur en arbeidstijden\n# Hoofdstuk 3 Aan het werk\n## Artikel 19 Verantwoordelijkheid uitzendonderneming\n## Artikel 20 Recht op hulpmiddelen\n# Hoofdstuk 4 Beloning\n## Artikel 20a Inwerkingtreding hoofdstuk beloning\n### Paragraaf 1 Beloning\n## Artikel 21 Gelijkwaardige beloning\n## Artikel 22 Toepassing artikel 8 lid 1 Waadi\n### Paragraaf 2 Uitvoeringsregels beloning\n## Artikel 23 Vaststellen beloning en bevestiging uitzendkracht\n## Artikel 24 Vaststellen beloning niet-indeelbare uitzendkracht\n## Artikel 25 Inschaling\n## Artikel 26 Vaststellen van het uurloon\n## Artikel 27 Periodieken\n## Artikel 28 Grondslag toepassing gelijkwaardige arbeidsvoorwaarden\n## Artikel 29 Arbeidsongeschiktheid\n## Artikel 30 Feestdagen\n## Artikel 31 Vakantiedagen\n## Artikel 32 Vakantiebijslag\n## Artikel 33 Bepalen waarde (verlof)dag\n## Artikel 34 Duurzaam werken en leven\n## Artikel 35 Brutovergoedingen\n## Artikel 36 Toepassing uitvoeringsregels\n## Artikel 36a Overgangsrecht\n### Compensatie lager niveau arbeidsvoorwaarden\n### Arbeidsongeschiktheid\n### Paragraaf 3 Uitruil van arbeidsvoorwaarden\n## Artikel 37 Uitruil van arbeidsvoorwaarden\n### Algemene bepalingen\n### Paragraaf 4 Wegvallen uitzendarbeid\n## Artikel 38 Afrekenen opgebouwde en genoten arbeidsvoorwaarden bij wegvallen uitzendarbeid\n## Artikel 39 Loondoorbetaling bij wegvallen uitzendarbeid\n### Uitzendovereenkomst met loondoorbetalingsverplichting\n### Vervallen loondoorbetalingsverplichting\n## Artikel 39 Loondoorbetaling bij wegvallen uitzendarbeid\n### Uitzendovereenkomst zonder loondoorbetalingsverplichting\n### Uitzendovereenkomst met loondoorbetalingsverplichting\n### Vervallen loondoorbetalingsverplichting\n## Artikel 40 Opbouw vakantiebijslag en -dagen bij wegvallen uitzendarbeid\n## Artikel 41 Arbeidsongeschiktheid tijdens wegvallen uitzendarbeid\n## Artikel 41a Overgangsrecht\n### Paragraaf 5 Onwerkbaar weer\n## Artikel 42 Regeling onwerkbaar weer\n### Paragraaf 6 Passende arbeid\n## Artikel 43 Passende arbeid na wegvallen uitzendarbeid\n## Artikel 44 Beloning bij nieuwe terbeschikkingstelling\n# Hoofdstuk 5 Pensioen en zwaarwerkregeling\n## Artikel 44 a\n## Artikel 45 Pensioen\n## Artikel 46 Pensioen en gelijkwaardigheid\n## Artikel 47 Deelname uitzendkrachten aan de zwaarwerkregeling in de Bouw & Infra\n# Hoofdstuk 6 Bijzondere groepen\n## Artikel 47a AOW-gerechtigde uitzendkrachten\n## Rechtspositie\n## Opvolgend werkgeverschap\n## Artikel 48 De uitzendkracht met een buitenlandse arbeidsovereenkomst (WagwEU)\n## Artikel 49 Uitzendkrachten niet-permanent woonachtig in Nederland, huisvesting, vervoer en ziektekosten\n### Huisvesting\n### In rekening brengen huisvestingskosten\n### Verlaten huisvesting\n### Vervoer van en naar land van herkomst\n### Niet-werkgerelateerd vervoer\n### Woon-werkverkeer\n### Ziektekosten- en overige verzekeringen\n### Verantwoordelijkheden uitzendonderneming\n## Artikel 50 Verrekenen van boetes\n## Artikel 51 Inhoudingen op het loon\n## Artikel 52 Inkomensgarantie\n# Hoofdstuk 7 Overig\n## Artikel 53 Faciliteiten voor werknemersorganisaties\n## Artikel 54 SFU\n## Artikel 55 Private aanvulling WW en WGA\n## Artikel 56 Behandeling klachten en/of geschillen\n## Artikel 57 Fusiegedragsregels\n## Artikel 58 Naleving\n## Artikel 59 Dispensatie\n## Artikel 60 De uitzendkracht met een buitenlandse arbeidsovereenkomst (WagwEU)\n## Artikel 61 Wijzigingen\n# Bijlage I Loonstrook\n# Bijlage II Pensioen\n# Bijlage III Functie-indeling en functieniveau\n## Procedure voor functie-indeling\n# Bijlage IV Huisvestingsnormen\n# Bijlage V Prijs-kwaliteitsysteem (PKS) huisvesting\n### Basisvoorwaarden\n#### personen per slaapkamer\n#### personen per keuken\n#### personen per douche\n#### m2 GBO\n#### m2 slaapvertrek/persoon\n#### personen per w.c.\n#### WIFI\n### Aanvullende voorwaarden\n#### beheer (mate van aanwezigheid/bereikbaarheid)\n# Bijlage VI Dispensatie\n## Samenstelling Dispensatiecommissie\n## Wijze van behandeling\n## Criteria beoordeling dispensatieverzoek\n## Beslissing tot dispensatie\n## Protocolafspraken\n### Afspraken wegvallen van de uitzendarbeid\n### Zwaarwerkregeling"
+        }
+      }
+    ],
+    "Basic LLM Chain": [
+      {
+        "json": {
+          "text": "Bijlage VI Dispensatie \u2013 Samenstelling, behandeling en besluitvorming rond dispensatieverzoeken, plus protocolafspraken. Dit fragment gaat over de samenstelling van de Dispensatiecommissie (minimaal vier leden: twee door ABU, twee werknemerszijde; onafhankelijk secretaris), de wijze van behandeling (schriftelijk indienen, contactadres), termijn (8 weken, evt. verlenging) en beoordelingscriteria (onafhankelijkheid, gelijkwaardigheid, wettelijkheid). Tevens de protocolafspraken zoals wegvallen uitzendarbeid en zwaarwerkregeling."
+        }
+      }
+    ]
+  },
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Clean - JS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Correct the MD hierarchy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean - JS": {
+      "main": [
+        [
+          {
+            "node": "Extract TOC",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Extract TOC": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Correct the MD hierarchy": {
+      "main": [
+        [
+          {
+            "node": "MD",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chunking node": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields2": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Enhanced Chunk",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields1": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enhanced Chunk": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Chat AI",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Vector Store": {
+      "ai_tool": [
+        []
+      ]
+    },
+    "Embeddings OpenAI": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Supabase Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Default Data Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Supabase Vector Store",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recursive Character Text Splitter": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Default Data Loader",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI1": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Supabase documents DB",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "Supabase Vector Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase documents DB": {
+      "ai_tool": [
+        [
+          {
+            "node": "Chat AI",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Switch - Two phase meta-data collection",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "question_or_user_input",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Was our question helpful?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Chat AI",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Chat AI",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert rows in a table": {
+      "main": [
+        []
+      ]
+    },
+    "Does session ID exist?": {
+      "main": [
+        [
+          {
+            "node": "If it doesn't exist, add row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If it doesn't exist, add row": {
+      "main": [
+        [
+          {
+            "node": "Insert rows in a table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update rows - help from human?": {
+      "main": [
+        []
+      ]
+    },
+    "Switch - Two phase meta-data collection": {
+      "main": [
+        [
+          {
+            "node": "Does session ID exist?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is field filled ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If it doesn't exist, add row1": {
+      "main": [
+        [
+          {
+            "node": "Update rows - help from human?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Was our question helpful?": {
+      "main": [
+        [
+          {
+            "node": "Update rows - Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On form submission1": {
+      "main": [
+        [
+          {
+            "node": "Extract from File1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File1": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields3": {
+      "main": [
+        [
+          {
+            "node": "MD cleaned",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MD": {
+      "main": [
+        [
+          {
+            "node": "MD cleaned",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MD cleaned": {
+      "main": [
+        []
+      ]
+    },
+    "Chat AI": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is field filled ?": {
+      "main": [
+        [
+          {
+            "node": "If it doesn't exist, add row1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "question_or_user_input": {
+      "main": [
+        [
+          {
+            "node": "Chat AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "dcabd55f-6360-4c42-ab7c-16455e5525c8",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "3887d9f903df2fbe0848b12db7915294696c754f88e396969ee333b0de68dfc2"
+  },
+  "id": "qflGkR5NNdR6Rjss",
+  "tags": []
+}
