@@ -1,6 +1,6 @@
 # N8N_AI_AGENT_RAG
 
-> **Demo:** [Demo Chatbot](https://preview--alexchanrag-test.lovable.app/)
+> **RAG based AI Agent Demo:** [click here to access](https://preview--alexchanrag-test.lovable.app/)
 
 ![mainpage ](mainpage.png)
 
