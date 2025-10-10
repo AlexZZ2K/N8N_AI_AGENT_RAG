@@ -28,7 +28,7 @@ Built in **n8n**, the pipeline performs end-to-end ingestion, cleaning, chunking
 - Parsing via **LlamaParser** and Markdown conversion
 - Manual cleanup and post-formatting
 - Output: unified Markdown text for downstream processing
- ![Workflow overview](PreProcessing.png)
+ ![Workflow overview](Pre_Processing.png)
 
 ### 2️⃣ Chunking & Embedding Phase
 - Hierarchical chunking based on headings (#, ##, ###)
