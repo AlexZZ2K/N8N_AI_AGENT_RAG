@@ -1,8 +1,10 @@
 # N8N_AI_AGENT_RAG
 ## 🧭 Introduction
 
-> **RAG based AI Agent Demo:** [click here to try it out](https://preview--alexchanrag-test.lovable.app/)
-[![Demo GIF](./DemoChatbot.gif)](https://1drv.ms/v/c/01c8b611d509b4b6/IQQS7-QoLOYxR5DzNxxSk8EuARqwRyBjEQyFIMWoBRoAaVU)
+> **RAG based AI Agent Demo:** ~~[click here to try it out](https://preview--alexchanrag-test.lovable.app/)~~
+> **Demo might be taken down due to maintenance costs, see the demo video instead**
+> [click here to see the demo preview](https://1drv.ms/v/c/01c8b611d509b4b6/ERLv5Cgs5jFHkPM3HFKTwS4B3etjEviR-g7KUjCFHII-Gg?e=z2FOVa)
+
 
  An n8n + OpenAI + Supabase RAG Agent for intelligent document Q&A, designed by **Alex Chan (@AlexZZ2K)**.
 
